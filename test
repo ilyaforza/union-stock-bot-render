@@ -1,0 +1,5 @@
+# Измените URL remote на HTTPS
+git remote set-url origin https://github.com/ilyaforza/union-stock-bot-render.git
+
+# Теперь попробуйте push снова
+git push -u origin main
