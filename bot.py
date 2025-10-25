@@ -36,6 +36,10 @@ DATABASE_URL = os.environ.get('DATABASE_URL')
 if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
+# Если нет DATABASE_URL, используем SQLite как запасной вариант
+if not DATABASE_URL:
+    DATABASE_URL = 'sqlite:///bot_data.db'
+
 # Локальный файл для резервного копирования
 LOCAL_FILENAME = "Ostatki dlya bota (XLSX).xlsx"
 
@@ -49,7 +53,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Инициализация базы данных PostgreSQL
+# Инициализация базы данных
 Base = declarative_base()
 
 class User(Base):
@@ -78,28 +82,20 @@ class AdminLog(Base):
     details = Column(Text)
     timestamp = Column(DateTime)
 
-class BotData(Base):
-    __tablename__ = 'bot_data'
-    
-    id = Column(Integer, primary_key=True)
-    key = Column(String(100), unique=True)
-    value = Column(Text)
-    updated_at = Column(DateTime)
-
 # Инициализация базы данных
 def init_db():
     try:
         engine = create_engine(DATABASE_URL)
         Base.metadata.create_all(engine)
-        logger.info("✅ База данных PostgreSQL инициализирована")
+        logger.info("✅ База данных инициализирована")
         return engine
     except Exception as e:
         logger.error(f"❌ Ошибка инициализации базы данных: {e}")
-        # Создаем временную SQLite базу как запасной вариант
-        fallback_db = create_engine('sqlite:///fallback.db')
-        Base.metadata.create_all(fallback_db)
+        # Резервный вариант с SQLite
+        engine = create_engine('sqlite:///bot_data.db')
+        Base.metadata.create_all(engine)
         logger.info("✅ Создана резервная SQLite база данных")
-        return fallback_db
+        return engine
 
 # Глобальный engine для базы данных
 try:
@@ -115,6 +111,9 @@ def get_user(user_id):
     try:
         user = session.query(User).filter(User.user_id == user_id).first()
         return user
+    except Exception as e:
+        logger.error(f"Ошибка при получении пользователя: {e}")
+        return None
     finally:
         session.close()
 
@@ -146,6 +145,9 @@ def update_user(user_id, username, first_name, last_name):
             session.add(user)
         
         session.commit()
+    except Exception as e:
+        logger.error(f"Ошибка при обновлении пользователя: {e}")
+        session.rollback()
     finally:
         session.close()
 
@@ -156,6 +158,9 @@ def approve_user(user_id):
         if user:
             user.is_approved = True
             session.commit()
+    except Exception as e:
+        logger.error(f"Ошибка при подтверждении пользователя: {e}")
+        session.rollback()
     finally:
         session.close()
 
@@ -168,6 +173,9 @@ def block_user(user_id, reason="Не указана", block_until=None):
             user.block_reason = reason
             user.block_until = block_until
             session.commit()
+    except Exception as e:
+        logger.error(f"Ошибка при блокировке пользователя: {e}")
+        session.rollback()
     finally:
         session.close()
 
@@ -180,6 +188,9 @@ def unblock_user(user_id):
             user.block_reason = None
             user.block_until = None
             session.commit()
+    except Exception as e:
+        logger.error(f"Ошибка при разблокировке пользователя: {e}")
+        session.rollback()
     finally:
         session.close()
 
@@ -188,6 +199,9 @@ def get_all_users():
     try:
         users = session.query(User).order_by(User.last_seen.desc()).all()
         return users
+    except Exception as e:
+        logger.error(f"Ошибка при получении списка пользователей: {e}")
+        return []
     finally:
         session.close()
 
@@ -200,6 +214,9 @@ def get_pending_approvals():
             User.user_id != ADMIN_ID
         ).order_by(User.first_seen.desc()).all()
         return users
+    except Exception as e:
+        logger.error(f"Ошибка при получении ожидающих подтверждения: {e}")
+        return []
     finally:
         session.close()
 
@@ -215,28 +232,9 @@ def log_admin_action(admin_id, action, target_user_id=None, details=None):
         )
         session.add(log)
         session.commit()
-    finally:
-        session.close()
-
-def get_bot_data(key, default=None):
-    session = Session()
-    try:
-        data = session.query(BotData).filter(BotData.key == key).first()
-        return data.value if data else default
-    finally:
-        session.close()
-
-def set_bot_data(key, value):
-    session = Session()
-    try:
-        data = session.query(BotData).filter(BotData.key == key).first()
-        if data:
-            data.value = value
-            data.updated_at = datetime.now(MOSCOW_TZ)
-        else:
-            data = BotData(key=key, value=value, updated_at=datetime.now(MOSCOW_TZ))
-            session.add(data)
-        session.commit()
+    except Exception as e:
+        logger.error(f"Ошибка при логировании действия: {e}")
+        session.rollback()
     finally:
         session.close()
 
@@ -575,7 +573,7 @@ class StockBot:
 # Глобальный экземпляр бота
 stock_bot = StockBot()
 
-# Функция для поддержания активности (только для Render.com)
+# Функция для поддержания активности
 async def keep_alive():
     """Периодически отправляет запросы для поддержания активности"""
     if not os.environ.get('RENDER'):
@@ -584,8 +582,9 @@ async def keep_alive():
     while True:
         try:
             # Получаем URL приложения
-            app_url = f"https://{os.environ.get('RENDER_SERVICE_NAME', 'union-stock-bot')}.onrender.com"
-            response = requests.get(f"{app_url}/health", timeout=10)
+            app_name = os.environ.get('RENDER_SERVICE_NAME', 'union-stock-bot')
+            app_url = f"https://{app_name}.onrender.com"
+            response = requests.get(f"{app_url}/", timeout=10)
             logger.info(f"✅ Keep-alive запрос отправлен: {response.status_code}")
         except Exception as e:
             logger.warning(f"⚠️ Keep-alive запрос не удался: {e}")
@@ -595,11 +594,14 @@ async def keep_alive():
 # Фоновая задача для автоматического обновления
 async def auto_update_job(context: ContextTypes.DEFAULT_TYPE):
     """Фоновая задача для автоматического обновления данных"""
-    success = await asyncio.to_thread(stock_bot.background_ftp_update)
-    if success:
-        logger.info("✅ Автоматическое обновление данных завершено")
-    else:
-        logger.warning("❌ Автоматическое обновление данных не удалось")
+    try:
+        success = await asyncio.to_thread(stock_bot.background_ftp_update)
+        if success:
+            logger.info("✅ Автоматическое обновление данных завершено")
+        else:
+            logger.warning("❌ Автоматическое обновление данных не удалось")
+    except Exception as e:
+        logger.error(f"Ошибка в задаче автообновления: {e}")
 
 async def send_approval_request(application, user_id, username, first_name, last_name):
     """Отправка запроса на подтверждение администратору"""
@@ -1091,6 +1093,8 @@ async def admin_button_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                         if log.details:
                             logs_text += f"   Детали: {log.details}\n"
                         logs_text += "\n"
+            except Exception as e:
+                logs_text = f"❌ Ошибка при получении логов: {e}"
             finally:
                 session.close()
             
@@ -1137,18 +1141,6 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик ошибок"""
     logger.error(f"Exception while handling an update: {context.error}", exc_info=True)
 
-# Веб-сервер для поддержания активности
-from aiohttp import web
-
-async def health_check(request):
-    return web.Response(text="OK")
-
-def setup_web_server():
-    """Настройка веб-сервера для health checks"""
-    app = web.Application()
-    app.router.add_get('/health', health_check)
-    return app
-
 def main():
     """Основная функция"""
     # Создаем приложение
@@ -1188,21 +1180,6 @@ def main():
     print("👥 Система подтверждения пользователей активирована")
     print(f"🛠️ Администратор: {ADMIN_ID}")
     print("🌐 Хостинг: Render.com" if os.environ.get('RENDER') else "🌐 Хостинг: Локальный")
-    
-    # Запускаем веб-сервер для health checks (только на Render)
-    if os.environ.get('RENDER'):
-        port = int(os.environ.get('PORT', 8080))
-        web_app = setup_web_server()
-        
-        async def run_web_server():
-            runner = web.AppRunner(web_app)
-            await runner.setup()
-            site = web.TCPSite(runner, '0.0.0.0', port)
-            await site.start()
-            print(f"🌐 Веб-сервер запущен на порту {port}")
-            
-        loop = asyncio.get_event_loop()
-        loop.create_task(run_web_server())
     
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
