@@ -16,6 +16,10 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from dotenv import load_dotenv
 
+# Подавление предупреждений SQLAlchemy 2.0
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
 # Загрузка переменных окружения
 load_dotenv()
 
@@ -31,14 +35,8 @@ FTP_PASSWORD = os.environ.get('FTP_PASSWORD')
 FTP_PATH = os.environ.get('FTP_PATH', '/')
 FTP_FILENAME = os.environ.get('FTP_FILENAME', "Ostatki dlya bota (XLSX).xlsx")
 
-# Настройка PostgreSQL
-DATABASE_URL = os.environ.get('DATABASE_URL')
-if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
-
-# Если нет DATABASE_URL, используем SQLite как запасной вариант
-if not DATABASE_URL:
-    DATABASE_URL = 'sqlite:///bot_data.db'
+# Настройка базы данных - используем SQLite для совместимости
+DATABASE_URL = 'sqlite:///bot_data.db'
 
 # Локальный файл для резервного копирования
 LOCAL_FILENAME = "Ostatki dlya bota (XLSX).xlsx"
@@ -53,7 +51,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Инициализация базы данных
+# Инициализация базы данных SQLite
 Base = declarative_base()
 
 class User(Base):
@@ -87,20 +85,19 @@ def init_db():
     try:
         engine = create_engine(DATABASE_URL)
         Base.metadata.create_all(engine)
-        logger.info("✅ База данных инициализирована")
+        logger.info("✅ База данных SQLite инициализирована")
         return engine
     except Exception as e:
         logger.error(f"❌ Ошибка инициализации базы данных: {e}")
-        # Резервный вариант с SQLite
-        engine = create_engine('sqlite:///bot_data.db')
-        Base.metadata.create_all(engine)
-        logger.info("✅ Создана резервная SQLite база данных")
-        return engine
+        return None
 
 # Глобальный engine для базы данных
 try:
     engine = init_db()
-    Session = sessionmaker(bind=engine)
+    if engine:
+        Session = sessionmaker(bind=engine)
+    else:
+        raise Exception("Не удалось инициализировать базу данных")
 except Exception as e:
     logger.error(f"❌ Критическая ошибка базы данных: {e}")
     raise
