@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: union-stock-bot
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    envVars:
+      - key: BOT_TOKEN
+        value: "7247121126:AAGqDsHXT_e471uHRlVHyvJF9ynudNy0xEk"
+      - key: ADMIN_ID
+        value: "275066977"
+      - key: FTP_HOST
+        value: "31.31.197.39"
+      - key: FTP_PORT
+        value: "21"
+      - key: FTP_USERNAME
+        value: "u3231370_union-stock-bot"
+      - key: FTP_PASSWORD
+        value: "54voG4Wq!!!"
+      - key: FTP_PATH
+        value: "/"
+      - key: FTP_FILENAME
+        value: "Ostatki dlya bota (XLSX).xlsx"
+      - key: RENDER
+        value: "true"
